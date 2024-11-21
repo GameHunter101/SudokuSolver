@@ -1,6 +1,10 @@
-use std::{collections::HashSet, fmt::Display, io::{Stdout, Write}};
+use std::{
+    collections::HashSet,
+    fmt::Display,
+    io::{Stdout, Write},
+};
 
-use crossterm::{cursor, style, QueueableCommand};
+use crossterm::{style, QueueableCommand};
 use rand::{thread_rng, Rng};
 
 pub const VERTICAL_LINE: &str = "│";
@@ -19,6 +23,7 @@ pub struct Board {
     cells: [u8; 81],
 }
 
+#[derive(Debug)]
 pub struct SudokuRow {
     pub cells: [u8; 9],
 }
@@ -31,6 +36,11 @@ impl Display for SudokuRow {
             .iter()
             .enumerate()
             .map(|(i, cell)| {
+                let cell = if *cell == 0 {
+                    " ".to_string()
+                } else {
+                    cell.to_string()
+                };
                 let prefix = if i % 3 == 0 {
                     VERTICAL_LINE.to_string() + " "
                 } else {
@@ -46,17 +56,19 @@ impl Display for SudokuRow {
     }
 }
 
+#[derive(Debug)]
 pub struct SudokuColumn {
     pub cells: [u8; 9],
 }
 
+#[derive(Debug)]
 pub struct SudokuTile {
     pub cells: [u8; 9],
 }
 
 impl Board {
     /// Board constructor
-    pub fn new(string_representation: &str) -> Board {
+    pub fn new(string_representation: String) -> Board {
         let cells: [u8; 81] = string_representation
             .chars()
             .map(|char| char.to_string().parse::<u8>().unwrap())
@@ -122,7 +134,6 @@ impl Board {
         let (_, temp_row_mid) = temp_row.split_at(VERTICAL_LINE.len());
         let (temp_row_mid, _) = temp_row_mid.split_at(temp_row_mid.len() - VERTICAL_LINE.len());
 
-        stdout.queue(cursor::MoveTo(0, 0)).unwrap();
         stdout
             .queue(style::Print(format!(
                 "{TOP_LEFT_CONNECTOR}{}{TOP_RIGHT_CONNECTOR}\n",
@@ -197,18 +208,17 @@ impl Board {
             .into_iter()
             .collect();
 
-        Some(
-            possible_options
-                .difference(&current_row_set)
-                .cloned()
-                .collect::<HashSet<u8>>()
-                .difference(&current_column_set)
-                .cloned()
-                .collect::<HashSet<u8>>()
-                .difference(&current_tile_set)
-                .cloned()
-                .collect(),
-        )
+        let options: Vec<u8> = possible_options
+            .difference(&current_row_set)
+            .cloned()
+            .collect::<HashSet<u8>>()
+            .difference(&current_column_set)
+            .cloned()
+            .collect::<HashSet<u8>>()
+            .difference(&current_tile_set)
+            .cloned()
+            .collect();
+        Some(options)
     }
 
     /// Searches for a cell with the least entropy. The lowest entropy equates to the highest confidence
@@ -234,12 +244,17 @@ impl Board {
 
     /// Solves the sudoku puzzle. Iteratively searches for the cell with least entropy, promptly
     /// collapsing it to a single possibility. Producing a wrong result is not impossible
-    pub fn solve_board(&mut self) {
+    /// TODO: Implement some form of backtracking to solve cases where wave function colapse gets
+    /// stuck
+    pub fn solve_board(&mut self) -> Result<(), &str> {
+        // let mut last_solve: Option<((usize, usize), Vec<u8>)> = None;
         let mut least_entropy_result = self.find_least_entropy();
         let mut rng = thread_rng();
         while least_entropy_result.is_some() {
             let ((row, col), min_entropy) = least_entropy_result.as_ref().unwrap();
-            // dbg!(row, col, &min_entropy);
+            if min_entropy.is_empty() {
+                return Err("Solver took a wrong turn");
+            }
             let cell_index = row * 9 + col;
             if min_entropy.len() == 1 {
                 self.cells[cell_index] = min_entropy[0];
@@ -247,8 +262,10 @@ impl Board {
                 let rand_index = rng.gen_range(0..min_entropy.len());
                 self.cells[cell_index] = min_entropy[rand_index];
             }
+            // last_solve = Some(((*row, *col), min_entropy.clone()));
             least_entropy_result = self.find_least_entropy();
         }
+        Ok(())
     }
 
     /// Validates the resulting board to make sure it follows the sudoku rules
