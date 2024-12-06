@@ -1,4 +1,4 @@
-use std::io::stdout;
+use std::{io::stdout, time::Instant};
 
 use crossterm::{
     cursor, style::Print, terminal::{self, Clear}, QueueableCommand
@@ -20,7 +20,7 @@ fn main() {
     let board_seed =thread_rng().gen();
     let remove_cell_seed = thread_rng().gen();
     let mut initial_board_string = generate_board(board_seed);
-    remove_board_cells(&mut initial_board_string, remove_cell_seed);
+    let cells_removed = remove_board_cells(&mut initial_board_string, remove_cell_seed, 20, 30);
 
     let mut board = Board::new(initial_board_string);
     terminal::enable_raw_mode().unwrap();
@@ -32,7 +32,7 @@ fn main() {
     board.draw_board(&mut stdout);
 
     let start_time = std::time::Instant::now();
-    if board.solve_board().is_err() {
+    if board.solve_board(&mut stdout).is_err() {
         println!("The solver was unable to complete the board.");
     }
     let end_time = std::time::Instant::now();
@@ -43,6 +43,18 @@ fn main() {
     board.validate_board();
     let duration = end_time - start_time;
     println!("Duration: {}ms", duration.as_millis());
+    println!("hints: {}", 81-cells_removed);
+
+    /* let mut total_completed = 0.0;
+    let mut total_average_time = 0.0;
+
+    for i in 0..1 {
+        let (completed_this_round, average_time) = benchmark(i * 200);
+        total_completed += completed_this_round;
+        total_average_time += average_time;
+    }
+
+    println!("Total completed: {total_completed} / 1000, average time: {}ms", total_average_time / 4.0); */
 }
 
 /// Base generation derived from https://gamedev.stackexchange.com/a/138228
@@ -100,11 +112,40 @@ fn generate_board(seed: u64) -> String {
         .collect()
 }
 
-fn remove_board_cells(board_string_representation: &mut String, seed: u64) {
+/// Takes a completed board and randomly removes cells from it
+fn remove_board_cells(board_string_representation: &mut String, seed: u64, minimum_hints: i32, maximum_hints: i32) -> i32 {
+    assert!(minimum_hints < maximum_hints, "User specified minimum hints is greater than or equal to maximum hints");
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    
-    for _ in 0..rng.gen_range(50..81-17) {
-        let rand_index = rng.gen_range(0..81);
+
+    let test = 81 - rng.gen_range(minimum_hints..maximum_hints);
+    for _ in 0..test {
+        let mut rand_index = rng.gen_range(0..81);
+        while board_string_representation.get(rand_index..rand_index+1) == Some("0") {
+            rand_index = rng.gen_range(0..81);
+        }
         board_string_representation.replace_range(rand_index..rand_index+1, "0");
     }
+
+    test
 }
+
+/* fn benchmark(seed: u64) -> (f32, f32){
+    let (completed_count, completed_times): (Vec<_>, Vec<_>) = (0..1000).map(|i| {
+        let mut initial_board_string = generate_board(i + seed);
+        remove_board_cells(&mut initial_board_string, i, 20, 40);
+
+        let start_time = Instant::now();
+        let mut board = Board::new(initial_board_string);
+        let solve = board.solve_board(None);
+        println!("{i}");
+        if solve.is_ok() {
+            (1.0, (Instant::now() - start_time).as_millis() as f32)
+        } else {
+            (0.0,0.0)
+        }
+    }).unzip();
+
+    let total_completed = completed_count.iter().sum::<f32>();
+    let total_time = completed_times.iter().sum::<f32>();
+    (total_completed, total_time / total_completed)
+} */

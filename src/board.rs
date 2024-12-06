@@ -5,7 +5,7 @@ use std::{
 };
 
 use crossterm::{style, QueueableCommand};
-use rand::{thread_rng, Rng};
+use rand::{rngs::ThreadRng, seq::IteratorRandom, thread_rng, Rng};
 
 pub const VERTICAL_LINE: &str = "│";
 pub const DOWN_T_CONNECTOR: &str = "┬";
@@ -64,6 +64,23 @@ pub struct SudokuColumn {
 #[derive(Debug)]
 pub struct SudokuTile {
     pub cells: [u8; 9],
+}
+
+#[derive(Debug)]
+pub struct BoardMove {
+    position: [usize; 2],
+    new_value: u8,
+    cascades: Vec<[usize; 2]>,
+}
+
+impl BoardMove {
+    pub fn position(&self) -> [usize; 2] {
+        self.position
+    }
+
+    pub fn new_value(&self) -> u8 {
+        self.new_value
+    }
 }
 
 impl Board {
@@ -246,24 +263,54 @@ impl Board {
     /// collapsing it to a single possibility. Producing a wrong result is not impossible
     /// TODO: Implement some form of backtracking to solve cases where wave function colapse gets
     /// stuck
-    pub fn solve_board(&mut self) -> Result<(), &str> {
-        // let mut last_solve: Option<((usize, usize), Vec<u8>)> = None;
+    pub fn solve_board(&mut self, stdout: &mut Stdout) -> Result<(), &str> {
+        let mut previous_moves: Vec<BoardMove> = Vec::with_capacity(81);
+
         let mut least_entropy_result = self.find_least_entropy();
         let mut rng = thread_rng();
         while least_entropy_result.is_some() {
             let ((row, col), min_entropy) = least_entropy_result.as_ref().unwrap();
+
             if min_entropy.is_empty() {
-                return Err("Solver took a wrong turn");
-            }
-            let cell_index = row * 9 + col;
-            if min_entropy.len() == 1 {
-                self.cells[cell_index] = min_entropy[0];
+                self.draw_board(stdout);
+                least_entropy_result = self.backtrack(&mut previous_moves, &mut rng);
+                continue;
             } else {
-                let rand_index = rng.gen_range(0..min_entropy.len());
-                self.cells[cell_index] = min_entropy[rand_index];
+                let cell_index = row * 9 + col;
+                if min_entropy.len() == 1 {
+                    self.cells[cell_index] = min_entropy[0];
+                    let last_move = previous_moves.last_mut();
+                    if let Some(last) = last_move {
+                        last.cascades.push([*row, *col]);
+                    }
+                } else {
+                    let mut valid_options = Vec::with_capacity(min_entropy.len());
+                    for value in min_entropy {
+                        self.cells[cell_index] = *value;
+                        let next_entropy = self.find_least_entropy();
+
+                        if let Some(entropy) = next_entropy {
+                            if !entropy.1.is_empty() {
+                                valid_options.push((*value, entropy));
+                            }
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    let choice = valid_options.into_iter().reduce(|acc, (val, entropy_data)| {
+                        if entropy_data.1.len() < acc.1.1.len() {
+                            return (val, entropy_data);
+                        }
+                        acc
+                    }).unwrap();
+                    previous_moves.push(BoardMove {
+                        position: [*row, *col],
+                        new_value: choice.0,
+                        cascades: Vec::new(),
+                    });
+                };
+                least_entropy_result = self.find_least_entropy();
             }
-            // last_solve = Some(((*row, *col), min_entropy.clone()));
-            least_entropy_result = self.find_least_entropy();
         }
         Ok(())
     }
@@ -291,5 +338,66 @@ impl Board {
             }
         }
         println!("The board is valid!");
+    }
+
+    /// Backtracking moves when a mistake is made. Re-evaluates the entropy at the previous point,
+    /// excluding the value that it took when executing the first time. Filters out values that
+    /// lead to invalid board states.
+    pub fn backtrack(
+        &mut self,
+        previous_moves: &mut Vec<BoardMove>,
+        rng: &mut ThreadRng,
+    ) -> Option<((usize, usize), Vec<u8>)> {
+        assert!(!previous_moves.is_empty());
+        // println!("Here: {}", previous_moves.len());
+
+        let last_move = previous_moves.pop().unwrap();
+
+        for cascade in &last_move.cascades {
+            self.cells[cascade[0] * 9 + cascade[1]] = 0;
+        }
+
+        let last_move_position = last_move.position;
+        let last_move_position_index = last_move_position[0] * 9 + last_move_position[1];
+        self.cells[last_move_position_index] = 0;
+
+        let mut last_cell_entropy: HashSet<u8> = self
+            .calculate_entropy_at_cell(last_move_position[0], last_move_position[1])
+            .unwrap()
+            .into_iter()
+            .collect();
+
+        last_cell_entropy.remove(&last_move.new_value);
+
+        let cell_subsitute_opt = last_cell_entropy
+            .iter()
+            .map(|possible_value| {
+                self.cells[last_move_position_index] = *possible_value;
+                (possible_value, self.find_least_entropy())
+            })
+            .filter(|(_, x)| {
+                if x.is_none() {
+                    return false;
+                }
+
+                !x.as_ref().unwrap().1.is_empty()
+            })
+            .map(|(val, next_data)| (*val, next_data.unwrap()))
+            .choose(rng);
+
+        if let Some((substitute_val, next_data)) = cell_subsitute_opt {
+            println!("Substitute for {last_move:?}: {substitute_val}, next pos and entropy: {next_data:?}");
+            let new_move = BoardMove {
+                position: last_move_position,
+                new_value: substitute_val,
+                cascades: Vec::new(),
+            };
+            previous_moves.push(new_move);
+            return Some(next_data);
+        } else {
+            println!("Recursing");
+            self.backtrack(previous_moves, rng);
+        }
+        None
     }
 }
